@@ -1,0 +1,155 @@
+name: Sync Release to GetRomplur.com
+
+on:
+  release:
+    types: [published, edited]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync Release to GetRomplur Database
+        env:
+          SUPABASE_URL: ${{ secrets.GETROMPLUR_SUPABASE_URL || 'https://rwrrmtezdxsgkvidpuuw.supabase.co' }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.GETROMPLUR_SERVICE_ROLE_KEY }}
+          RELEASE_JSON: ${{ toJson(github.event.release) }}
+        run: |
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::warning ::GETROMPLUR_SERVICE_ROLE_KEY secret not configured. Skipping automatic sync to GetRomplur.com."
+            exit 0
+          fi
+          node - << 'NODE_SCRIPT'
+          const https = require('https');
+
+          const release = JSON.parse(process.env.RELEASE_JSON);
+          const supabaseUrl = process.env.SUPABASE_URL;
+          const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+          console.log(`Processing release ${release.tag_name} (${release.name})...`);
+
+          const version = release.tag_name.replace(/^v/, '');
+          const releaseNotes = release.body || '';
+
+          // Determine assets
+          const assets = release.assets || [];
+          console.log(`Found ${assets.length} assets.`);
+
+          async function supabaseRequest(path, method, body) {
+            return new Promise((resolve, reject) => {
+              const url = new URL(`${supabaseUrl}/rest/v1/${path}`);
+              const options = {
+                hostname: url.hostname,
+                path: url.pathname + url.search,
+                method: method,
+                headers: {
+                  'apikey': serviceKey,
+                  'Authorization': `Bearer ${serviceKey}`,
+                  'Content-Type': 'application/json',
+                  'Prefer': 'return=representation'
+                }
+              };
+              const req = https.request(options, (res) => {
+                let data = '';
+                res.on('data', (chunk) => data += chunk);
+                res.on('end', () => {
+                  try {
+                    resolve({ status: res.statusCode, data: data ? JSON.parse(data) : null });
+                  } catch (e) {
+                    resolve({ status: res.statusCode, data: data });
+                  }
+                });
+              });
+              req.on('error', reject);
+              if (body) req.write(JSON.stringify(body));
+              req.end();
+            });
+          }
+
+          async function run() {
+            // Find macOS package
+            const macPkg = assets.find(a => a.name.endsWith('-macOS.pkg'));
+            // Find macOS unsigned kit
+            const macKit = assets.find(a => a.name.endsWith('-macOS-UnsignedInstallKit.zip'));
+            // Find Windows setup
+            const winExe = assets.find(a => a.name.endsWith('-Windows-Setup.exe'));
+
+            // Archive older records
+            if (macPkg || macKit) {
+              console.log('Archiving older macOS releases...');
+              await supabaseRequest('romplur_updates?platform=eq.macOS', 'PATCH', { is_latest: false });
+            }
+            if (winExe) {
+              console.log('Archiving older Windows releases...');
+              await supabaseRequest('romplur_updates?platform=eq.Windows', 'PATCH', { is_latest: false });
+            }
+
+            const entries = [];
+
+            if (winExe) {
+              entries.push({
+                title: 'Romplur Studio',
+                version: version,
+                description: `Romplur Studio ${version}`,
+                release_notes: releaseNotes,
+                file_name: winExe.name,
+                file_path: `github:${winExe.browser_download_url}`,
+                file_size: winExe.size,
+                file_url: winExe.browser_download_url,
+                platform: 'Windows',
+                update_type: 'Romplur Update',
+                is_latest: true,
+                is_published: true,
+                access_type: 'public'
+              });
+            }
+
+            if (macPkg) {
+              entries.push({
+                title: 'Romplur Studio',
+                version: version,
+                description: `Romplur Studio ${version} for macOS`,
+                release_notes: releaseNotes,
+                file_name: macPkg.name,
+                file_path: `github:${macPkg.browser_download_url}`,
+                file_size: macPkg.size,
+                file_url: macPkg.browser_download_url,
+                platform: 'macOS',
+                update_type: 'Romplur Update',
+                is_latest: true,
+                is_published: true,
+                access_type: 'public'
+              });
+            }
+
+            if (macKit) {
+              entries.push({
+                title: 'Romplur Studio - Unsigned Install Kit (UB)',
+                version: version,
+                description: `Romplur Studio ${version} Unsigned Install Kit`,
+                release_notes: releaseNotes,
+                file_name: macKit.name,
+                file_path: `github:${macKit.browser_download_url}`,
+                file_size: macKit.size,
+                file_url: macKit.browser_download_url,
+                platform: 'macOS',
+                update_type: 'Install Kit',
+                is_latest: true,
+                is_published: true,
+                access_type: 'public'
+              });
+            }
+
+            for (const entry of entries) {
+              console.log(`Inserting/Updating ${entry.title} (${entry.platform})...`);
+              const res = await supabaseRequest('romplur_updates', 'POST', entry);
+              console.log(`Result: ${res.status}`);
+            }
+
+            console.log('Sync to GetRomplur.com completed successfully!');
+          }
+
+          run().catch(err => {
+            console.error('Error syncing release:', err);
+            process.exit(1);
+          });
+          NODE_SCRIPT
