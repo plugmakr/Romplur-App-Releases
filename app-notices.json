@@ -1,4 +1,18 @@
 {
   "schema_version": 1,
-  "notices": []
+  "notices": [
+    {
+      "id": "romplur-2.9.9a-for-2.9.9",
+      "revision": 1,
+      "title": "Romplur 2.9.9a is available",
+      "message": "Romplur 2.9.9a is out for Windows, with GUI Designer and exported plug-in fixes. Romplur 2.9.9 can't install this update automatically, so please download it yourself and run the installer over your current version. Your presets, projects and settings are kept.\n\nDownload: https://github.com/plugmakr/Romplur-App-Releases/releases/tag/v2.9.9a\nOr from your account at getromplur.com.",
+      "platforms": [
+        "windows"
+      ],
+      "minimum_version": "2.9.9",
+      "maximum_version": "2.9.9",
+      "starts_at": 1793602880,
+      "expires_at": 1803970940
+    }
+  ]
 }
